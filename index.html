@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>スピーチ録音</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://script.google.com https://script.googleusercontent.com; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<style>
+/* Layout: one centered column, one step on screen at a time; the countdown is the hero. */
+:root {
+  --bg: #eef1f6;
+  --panel: #ffffff;
+  --ink: #16213a;
+  --muted: #5a6680;
+  --line: #d4dbe7;
+  --accent: #2346c8;
+  --rec: #d42a3c;
+  --ok: #1d7a4f;
+  --body: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1424; --panel: #182038; --ink: #e8ecf6; --muted: #9aa6c2;
+    --line: #2b3656; --accent: #7d97ff; --rec: #ff5c6c; --ok: #4fc58c;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 17px/1.7 var(--body);
+  padding: 32px 16px 48px;
+  min-height: 100vh;
+}
+main { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { font: 900 1.5rem/1.2 var(--body); margin: 0; }
+.who { color: var(--muted); font-size: 0.95rem; }
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 24px; display: flex; flex-direction: column; gap: 18px;
+}
+h2 { font: 700 1.2rem/1.4 var(--body); margin: 0; }
+.label { font-size: 0.82rem; color: var(--muted); font-weight: 700; letter-spacing: 0.04em; }
+input[type=text] {
+  width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+  border: 1.5px solid var(--line); border-radius: 10px; padding: 12px 14px;
+}
+input:focus, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+button:disabled { opacity: 0.55; cursor: wait; }
+button {
+  font: 700 1.05rem var(--body); border: 0; border-radius: 999px; cursor: pointer;
+  padding: 14px 28px; background: var(--accent); color: #fff; align-self: flex-start;
+}
+button.rec { background: var(--rec); }
+button.ghost { background: transparent; color: var(--accent); border: 1.5px solid var(--line); }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+.clock {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px;
+}
+.clock-main { display: flex; flex-direction: column; gap: 2px; }
+.time { font: 500 clamp(2.6rem, 10vw, 3.8rem)/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.phase { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.95rem;
+  padding: 6px 14px; border-radius: 999px; border: 1.5px solid var(--accent); color: var(--accent); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.phase.recording { color: var(--rec); border-color: var(--rec); }
+.phase.recording .dot { background: var(--rec); animation: pulse 1.1s ease-in-out infinite; }
+.phase.done { color: var(--ok); border-color: var(--ok); }
+.phase.done .dot { background: var(--ok); }
+@keyframes pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .phase.recording .dot { animation: none; } }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; flex-basis: 100%; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+.clock.recording .bar i { background: var(--rec); }
+
+.task { white-space: pre-wrap; font-size: 1.08rem; line-height: 1.85; }
+.task-img { display: block; max-width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+.meter { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--rec); transition: width 80ms linear; }
+.note { color: var(--muted); font-size: 0.92rem; margin: 0; }
+.error { color: var(--rec); font-weight: 700; margin: 0; }
+.status { font-weight: 700; margin: 0; }
+.status.ok { color: var(--ok); }
+.status.bad { color: var(--rec); }
+@media (max-width: 420px) { .panel { padding: 18px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>スピーチ録音</h1>
+    <span class="who" id="who"></span>
+  </header>
+
+  <div class="clock" id="clock" hidden>
+    <div class="clock-main">
+      <span class="label" id="clockLabel">準備時間 残り</span>
+      <span class="time" id="time">02:00</span>
+    </div>
+    <span class="phase" id="phase"><span class="dot"></span><span id="phaseText">準備中</span></span>
+    <div class="bar"><i id="bar"></i></div>
+  </div>
+
+  <!-- 1. 学籍番号 -->
+  <section class="panel" id="stepStart">
+    <h2>はじめる前に</h2>
+    <div class="field">
+      <label class="label" for="pid">学籍番号</label>
+      <input type="text" id="pid" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="32" placeholder="例：24A1234">
+    </div>
+    <p class="note">学籍番号を入力して「次へ」を押すと、課題が表示され、<strong>準備時間（2分）</strong>が始まります。<br>
+    学籍番号は1回しか使えません。準備ができてから「次へ」を押してください。<br>
+    マイクの使用を求められたら「許可」を押してください。</p>
+    <p class="error" id="startError" hidden></p>
+    <button id="btnStart">次へ</button>
+  </section>
+
+  <!-- 2. 準備 -->
+  <section class="panel" id="stepPrep" hidden>
+    <span class="label">課題</span>
+    <div class="task" id="taskText"></div>
+    <img class="task-img" id="taskImg" alt="課題の画像" hidden>
+    <p class="note">準備ができたら「録音開始」を押してください。<br>
+    準備時間（2分）が終わると、合図の音が鳴り、自動的に録音が始まります。<br>
+    録音は<strong>2分</strong>で自動的に終了します。</p>
+    <button class="rec" id="btnRecord">録音開始</button>
+  </section>
+
+  <!-- 3. 録音 -->
+  <section class="panel" id="stepRec" hidden>
+    <span class="label">課題</span>
+    <div class="task" id="taskText2"></div>
+    <img class="task-img" id="taskImg2" alt="課題の画像" hidden>
+    <div class="field">
+      <span class="label">マイクの音量</span>
+      <div class="meter"><i id="level"></i></div>
+    </div>
+    <p class="note">録音中です。発話時間が終わると自動的に終了します。</p>
+  </section>
+
+  <!-- 4. 提出 -->
+  <section class="panel" id="stepDone" hidden>
+    <h2 id="doneTitle">録音を提出しています</h2>
+    <p class="status" id="uploadStatus">送信しています…この画面を閉じないでください。</p>
+    <p class="note" id="receipt" hidden></p>
+    <button id="btnRetry" hidden>もう一度送信する</button>
+  </section>
+</main>
+
+<script>
+/* ====== 設定 ====== */
+const PREP_SECONDS = 120;   // 準備時間
+const SPEAK_SECONDS = 120;  // 発話時間
+const SERVER_URL = "https://script.google.com/macros/s/AKfycbxFChygORwPDCYDv_9iUY_6BzKOP3dXUFc3WChOKjIaP0lr1jxuLSh0PpNLSQI45DDCNA/exec";
+/* ================== */
+
+const $ = id => document.getElementById(id);
+const steps = ["stepStart", "stepPrep", "stepRec", "stepDone"];
+function show(step) { steps.forEach(s => $(s).hidden = s !== step); }
+function fmt(sec) {
+  sec = Math.max(0, Math.ceil(sec));
+  return String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
+}
+
+let stream = null, recorder = null, chunks = [], blob = null, audioCtx = null, meterLoop = null;
+let pid = "", token = "", tick = null, uploaded = false, busy = false;
+let tPrepStart = 0, tRecStart = 0, tRecEnd = 0;
+
+async function callServer(payload) {
+  const resp = await fetch(SERVER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+    credentials: "omit",
+    cache: "no-store"
+  });
+  if (!resp.ok) throw new Error("http " + resp.status);
+  return resp.json();
+}
+
+function countdown(seconds, onEnd) {
+  const t0 = performance.now();
+  clearInterval(tick);
+  const update = () => {
+    const left = seconds - (performance.now() - t0) / 1000;
+    $("time").textContent = fmt(left);
+    $("bar").style.width = Math.min(100, (1 - left / seconds) * 100) + "%";
+    if (left <= 0) { clearInterval(tick); onEnd(); }
+  };
+  update();
+  tick = setInterval(update, 200);
+}
+
+function beep(freq = 880, ms = 350) {
+  try {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.2;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + ms / 1000);
+  } catch (e) {}
+}
+
+function showStartError(msg) { $("startError").textContent = msg; $("startError").hidden = false; }
+function setPhase(cls, text) {
+  $("phase").className = "phase " + cls;
+  $("clock").className = "clock " + cls;
+  $("phaseText").textContent = text;
+}
+
+// 1 → 2：マイクを確認 → 学籍番号をサーバーで確認 → 課題を表示して準備時間を開始
+$("pid").addEventListener("keydown", e => { if (e.key === "Enter") $("btnStart").click(); });
+$("btnStart").onclick = async () => {
+  if (busy || token) return;
+  const id = $("pid").value.trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{1,32}$/.test(id)) { showStartError("学籍番号を正しく入力してください（半角英数字）。"); $("pid").focus(); return; }
+  if (!SERVER_URL) { showStartError("設定が完了していません。担当者に連絡してください。"); return; }
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+  } catch (e) {}
+  if (!navigator.mediaDevices || !window.MediaRecorder || !window.crypto || !crypto.subtle) {
+    showStartError("このブラウザでは録音できません。Google Chrome または Safari の最新版で開いてください。");
+    return;
+  }
+  busy = true; $("btnStart").disabled = true; $("btnStart").textContent = "確認しています…";
+  $("startError").hidden = true;
+  try {
+    if (!stream) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { stream = null; showStartError("マイクが使えません。ブラウザでマイクの使用を許可してから、もう一度「次へ」を押してください。"); return; }
+    }
+    let res;
+    try { res = await callServer({ action: "start", id }); }
+    catch (e) { showStartError("サーバーに接続できません。インターネット接続を確認して、もう一度「次へ」を押してください。"); return; }
+    if (!res.ok) {
+      const msg = {
+        invalid_id: "この学籍番号は登録されていません。もう一度確認してください。",
+        already_used: "この学籍番号はすでに使用されています。担当者に連絡してください。"
+      }[res.code] || "エラーが発生しました。担当者に連絡してください。";
+      showStartError(msg);
+      return;
+    }
+    pid = id; token = res.token;
+    beginTask(res.task || {});
+  } finally {
+    busy = false; $("btnStart").disabled = false; $("btnStart").textContent = "次へ";
+  }
+};
+
+function beginTask(task) {
+  $("who").textContent = "学籍番号：" + pid;
+  $("taskText").textContent = task.text || "";
+  $("taskText2").textContent = task.text || "";
+  if (task.image && /^data:image\/(png|jpeg|gif|webp);base64,/.test(task.image)) {
+    $("taskImg").src = task.image; $("taskImg2").src = task.image;
+    $("taskImg").hidden = false; $("taskImg2").hidden = false;
+  }
+  $("taskImg").after($("clock"));
+  $("clock").hidden = false;
+  $("clockLabel").textContent = "準備時間 残り";
+  setPhase("", "準備中");
+  show("stepPrep");
+  tPrepStart = performance.now();
+  countdown(PREP_SECONDS, startRecording);
+}
+
+// 2 → 3：「録音開始」ボタン、または準備時間終了で録音開始
+$("btnRecord").onclick = () => startRecording();
+function startRecording() {
+  if (recorder) return;
+  clearInterval(tick);
+  beep(880);
+  chunks = [];
+  const isSafari = /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+  const types = isSafari ? ["audio/mp4", "audio/webm"] : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+  const mimeType = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
+  recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = finish;
+  recorder.start(1000);
+  tRecStart = performance.now();
+  $("taskImg2").after($("clock"));
+  $("clockLabel").textContent = "発話時間 残り";
+  setPhase("recording", "録音中");
+  show("stepRec");
+  startMeter();
+  countdown(SPEAK_SECONDS, stopRecording);
+}
+
+// 3 → 4：自動で録音終了
+function stopRecording() {
+  tRecEnd = performance.now();
+  beep(660, 500);
+  stopMeter();
+  recorder.stop();
+  stream.getTracks().forEach(t => t.stop());
+}
+
+function finish() {
+  blob = new Blob(chunks, { type: (recorder.mimeType || "audio/webm").split(";")[0] });
+  chunks = [];
+  $("clock").hidden = true;
+  show("stepDone");
+  upload();
+}
+
+// 送信：サーバーが保存を確認するまで「完了」は表示しない
+async function upload() {
+  $("btnRetry").hidden = true;
+  $("doneTitle").textContent = "録音を提出しています";
+  $("uploadStatus").className = "status";
+  $("uploadStatus").textContent = "送信しています…この画面を閉じないでください。";
+  let payload;
+  try {
+    const buf = await blob.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    const sha256 = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(",")[1]);
+      r.onerror = rej;
+      r.readAsDataURL(blob);
+    });
+    payload = {
+      action: "submit", id: pid, token, mimeType: blob.type, size: blob.size, sha256, audio: base64,
+      prepSeconds: (tRecStart - tPrepStart) / 1000, recSeconds: (tRecEnd - tRecStart) / 1000
+    };
+  } catch (e) { return uploadFailed(); }
+
+  const waits = [0, 2000, 5000, 10000];   // 自動で最大4回まで試す
+  for (const w of waits) {
+    if (w) await new Promise(r => setTimeout(r, w));
+    try {
+      const res = await callServer(payload);
+      if (res.ok && res.receipt) return uploadDone(res.receipt);
+      if (["invalid_session", "already_submitted", "expired", "bad_type", "too_large"].includes(res.code)) return uploadFailed(res.code);
+    } catch (e) { /* 通信エラー：もう一度試す */ }
+  }
+  uploadFailed();
+}
+
+function uploadDone(receipt) {
+  uploaded = true;
+  blob = null;   // 録音データをブラウザのメモリから消す
+  $("doneTitle").textContent = "お疲れさまでした";
+  $("uploadStatus").className = "status ok";
+  $("uploadStatus").textContent = "録音の提出が完了しました。保存されたことを確認済みです。この画面を閉じてかまいません。";
+  $("receipt").textContent = "受付番号：" + receipt;
+  $("receipt").hidden = false;
+}
+function uploadFailed(code) {
+  $("doneTitle").textContent = "提出できていません";
+  $("uploadStatus").className = "status bad";
+  $("uploadStatus").textContent = code
+    ? "録音を保存できませんでした（" + code + "）。この画面を閉じずに、担当者に連絡してください。"
+    : "録音を送信できませんでした。インターネット接続を確認して「もう一度送信する」を押してください。うまくいかない場合は、この画面を閉じずに担当者に連絡してください。";
+  $("btnRetry").hidden = !!code;
+}
+$("btnRetry").onclick = upload;
+
+// 提出前に画面を閉じようとしたら確認する
+window.addEventListener("beforeunload", e => {
+  if (token && !uploaded) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// マイクの音量表示
+function startMeter() {
+  try {
+    const src = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const loop = () => {
+      analyser.getByteTimeDomainData(data);
+      let peak = 0; for (const v of data) peak = Math.max(peak, Math.abs(v - 128));
+      $("level").style.width = Math.min(100, peak / 128 * 160) + "%";
+      meterLoop = requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (e) {}
+}
+function stopMeter() { cancelAnimationFrame(meterLoop); $("level").style.width = "0"; }
+</script>
+</body>
+</html>
